@@ -1,0 +1,6 @@
+{
+  "name": "KR LUXE HOTEL",
+  "description": "KR LUXE HOTEL - Luxury Hospitality & Enterprise Property Management System featuring guest suite reservations, interactive booking, concierge dining services, front desk operations, room inventory management, and digital billing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
