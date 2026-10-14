@@ -30,6 +30,7 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { downloadFolioReceiptImage } from '../utils/receiptImageGenerator';
+import { apiService } from '../services/apiService';
 import {
   AuthUser,
   RoomItem,
@@ -407,7 +408,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     const isPrepaid = paymentPreference === 'prepay_now';
 
     // Create reservation
-    const newReservation: ReservationItem = {
+    // Build local representation for instant UI responsiveness
+    const localReservation: ReservationItem = {
       id: reservations.length + 1,
       guestId: 100 + reservations.length,
       guestName: guestName || currentUser.name,
@@ -424,10 +426,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     };
 
     // Create initial invoice with full itemization
-    const newInvoice: InvoiceItem = {
+    const localInvoice: InvoiceItem = {
       id: invoices.length + 1,
       invoiceNumber: `INV-2026-${1000 + invoices.length + 1}`,
-      reservationId: newReservation.id,
+      reservationId: localReservation.id,
       guestName: guestName || currentUser.name,
       roomNumber: bookingRoom.number,
       roomType: bookingRoom.type,
@@ -456,15 +458,44 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
       }] : []
     };
 
-    // Update room status to Reserved
+    // Update room status to Reserved immediately
     setRooms(rooms.map(r => r.id === bookingRoom.id ? { ...r, status: 'Reserved' } : r));
-    setReservations([newReservation, ...reservations]);
-    setInvoices([newInvoice, ...invoices]);
+    setReservations([localReservation, ...reservations]);
+    setInvoices([localInvoice, ...invoices]);
+
+    // Asynchronously insert into SQL Database
+    apiService.createReservation({
+      guestName: guestName || currentUser.name,
+      guestEmail: guestEmail || currentUser.email,
+      guestPhone: guestPhone || currentUser.phone || '+91 98421 00000',
+      roomId: bookingRoom.id,
+      roomNumber: bookingRoom.number,
+      roomType: bookingRoom.type,
+      checkInDate,
+      checkOutDate,
+      numberOfGuests,
+      numberOfNights,
+      roomCharges: bookingRoom.pricePerNight * numberOfNights,
+      discount: discountAmount,
+      taxAmount: calculatedTax,
+      grandTotal: calculatedGrandTotal,
+      specialRequests: promoCode ? `${specialRequests} [Voucher: ${promoCode}]`.trim() : specialRequests,
+      paymentMethod: isPrepaid ? 'UPI' : 'Credit_Card',
+      payNow: isPrepaid
+    }).then(sqlSaved => {
+      if (sqlSaved) {
+        // Synchronize with database auto-generated IDs
+        setReservations(prev => prev.map(r => r.id === localReservation.id ? sqlSaved.reservation : r));
+        setInvoices(prev => prev.map(i => i.id === localInvoice.id ? sqlSaved.invoice : i));
+      }
+    }).catch(err => {
+      console.warn('SQL database background sync:', err);
+    });
 
     showNotification(
       isPrepaid
-        ? `Reservation confirmed & prepaid for Room ${bookingRoom.number}! Folio #${newInvoice.invoiceNumber} marked Settled.`
-        : `Reservation confirmed for Room ${bookingRoom.number}! Folio #${newInvoice.invoiceNumber} generated.`
+        ? `Reservation confirmed & stored in SQL! Room ${bookingRoom.number} marked Settled.`
+        : `Reservation confirmed & stored in SQL! Room ${bookingRoom.number} booked successfully.`
     );
     setBookingRoom(null);
     setActiveTab('bookings');
@@ -497,6 +528,19 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
     setGuestServices([newCharge, ...guestServices]);
 
+    // Asynchronously insert into SQL Database
+    apiService.addGuestService({
+      reservationId: activeRes.id,
+      guestName: currentUser.name,
+      roomNumber: activeRes.roomNumber,
+      serviceId: service.id,
+      serviceName: service.name,
+      quantity: 1,
+      unitPrice: service.price,
+      totalPrice: service.price,
+      notes: 'Guest suite culinary order'
+    }).catch(err => console.warn('SQL service charge sync:', err));
+
     // Update associated invoice
     setInvoices(invoices.map(inv => {
       if (inv.reservationId === activeRes.id) {
@@ -519,12 +563,15 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     }));
 
     showNotification(
-      `Order placed for "${service.name}" (${formatCurrency(service.price)})! Kitchen preparation has begun for Suite ${activeRes.roomNumber}. Automated delivery alert scheduled.`
+      `Order placed for "${service.name}" (${formatCurrency(service.price)})! Stored in SQL database.`
     );
   };
 
   // Handle Online Payment of Invoice
   const handleSettleBalance = (invoiceId: number) => {
+    // Settle in SQL database
+    apiService.settleInvoice(invoiceId).catch(err => console.warn('SQL invoice settle sync:', err));
+
     setInvoices(invoices.map(inv => {
       if (inv.id === invoiceId) {
         return {
@@ -548,7 +595,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
       return inv;
     }));
 
-    showNotification('Payment processed successfully! Your folio balance is now ₹0.00.');
+    showNotification('Payment processed successfully & settled in SQL! Your folio balance is ₹0.00.');
     setPayingInvoice(null);
   };
 

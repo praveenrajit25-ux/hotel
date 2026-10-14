@@ -1,7 +1,7 @@
 package com.hotelmanagement;
 
+import com.hotelmanagement.config.DatabaseConnection;
 import com.hotelmanagement.ui.LoginFrame;
-import com.hotelmanagement.util.DatabaseConnection;
 import java.awt.*;
 import javax.swing.*;
 
@@ -29,7 +29,7 @@ public class Main {
 
         // Test or inform database connectivity in background
         new Thread(() -> {
-            boolean connected = DatabaseConnection.testConnection();
+            boolean connected = DatabaseConnection.getInstance().testConnection();
             if (!connected) {
                 System.err.println("[PMS Startup] Warning: Database connection failed. Please ensure MySQL is running and execute hotel_management.sql");
             } else {

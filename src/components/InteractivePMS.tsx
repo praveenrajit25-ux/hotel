@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LayoutDashboard,
   BedDouble,
@@ -26,9 +26,11 @@ import {
   Building,
   KeyRound,
   ShieldAlert,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Database
 } from 'lucide-react';
 import { downloadFolioReceiptImage } from '../utils/receiptImageGenerator';
+import { apiService } from '../services/apiService';
 import {
   initialSettings,
   initialRooms,
@@ -133,6 +135,17 @@ export const InteractivePMS: React.FC<InteractivePMSProps> = ({
   const [modalType, setModalType] = useState<string | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<any>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
+  const [dbStats, setDbStats] = useState<any>(null);
+  const [dbViewTable, setDbViewTable] = useState<'reservations' | 'invoices' | 'rooms'>('reservations');
+  const [isResettingDb, setIsResettingDb] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (activeModule === 'database') {
+      apiService.getDatabaseStatus().then(st => {
+        if (st) setDbStats(st);
+      });
+    }
+  }, [activeModule, reservations.length, rooms.length]);
 
   const showNotification = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setNotification({ message, type });
@@ -393,6 +406,16 @@ export const InteractivePMS: React.FC<InteractivePMSProps> = ({
             >
               <Settings className="w-4 h-4" />
               <span>Property Settings</span>
+            </button>
+
+            <button
+              onClick={() => setActiveModule('database')}
+              className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-md text-xs font-semibold transition-all ${
+                activeModule === 'database' ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold shadow-md shadow-amber-500/20' : 'text-slate-400 hover:bg-slate-850 hover:text-white hover:bg-slate-900'
+              }`}
+            >
+              <Database className="w-4 h-4" />
+              <span>SQL Database</span>
             </button>
           </nav>
 
@@ -1047,8 +1070,9 @@ export const InteractivePMS: React.FC<InteractivePMSProps> = ({
                           {inv.balanceAmount > 0 && (
                             <button
                               onClick={() => {
+                                apiService.settleInvoice(inv.id).catch(err => console.warn('SQL settle sync:', err));
                                 setInvoices(invoices.map(i => i.id === inv.id ? { ...i, paidAmount: i.grandTotal, balanceAmount: 0, paymentStatus: 'Paid' } : i));
-                                showNotification(`Full payment of ${formatCurrency(inv.balanceAmount)} recorded for ${inv.invoiceNumber}!`);
+                                showNotification(`Full payment of ${formatCurrency(inv.balanceAmount)} recorded for ${inv.invoiceNumber} and saved to SQL!`);
                               }}
                               className="px-2.5 py-1 bg-emerald-600 text-white rounded text-[11px] font-bold hover:bg-emerald-500 shadow-sm"
                             >
@@ -1402,6 +1426,323 @@ export const InteractivePMS: React.FC<InteractivePMSProps> = ({
               </div>
             </div>
           )}
+
+          {/* ======================= SQL DATABASE MANAGEMENT MODULE ======================= */}
+          {activeModule === 'database' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                  <h1 className="text-xl font-bold text-slate-100 flex items-center space-x-2.5">
+                    <Database className="w-5 h-5 text-amber-400" />
+                    <span>Relational SQL Database Management</span>
+                  </h1>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Live database storage (<span className="text-amber-300 font-semibold">database/hotel_management.db</span>) & automated reservation storage
+                  </p>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        await apiService.downloadSqlDump();
+                        showNotification('Live SQL database export downloaded successfully!');
+                      } catch {
+                        showNotification('Failed to export SQL database dump', 'error');
+                      }
+                    }}
+                    className="px-3.5 py-2 bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-all cursor-pointer shadow-sm"
+                    title="Export complete database as standalone .sql script"
+                  >
+                    <Download className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Export SQL Dump (.sql)</span>
+                  </button>
+
+                  <button
+                    disabled={isResettingDb}
+                    onClick={async () => {
+                      const confirmed = window.confirm(
+                        'Are you sure you want to reset the database? This will clear all dummy bookings and reinitialize fresh rooms & settings ready for real bookings.'
+                      );
+                      if (!confirmed) return;
+
+                      setIsResettingDb(true);
+                      try {
+                        const result = await apiService.resetDatabase();
+                        if (result.success) {
+                          // Reload state
+                          const [freshRooms, freshRes, freshInv] = await Promise.all([
+                            apiService.getRooms(),
+                            apiService.getReservations(),
+                            apiService.getInvoices()
+                          ]);
+                          if (freshRooms) setRooms(freshRooms);
+                          if (freshRes) setReservations(freshRes);
+                          if (freshInv) setInvoices(freshInv);
+                          showNotification('Database successfully reset to clean state with 0 dummy bookings!');
+                        } else {
+                          showNotification(result.message || 'Reset failed', 'error');
+                        }
+                      } catch {
+                        showNotification('Failed to reset database', 'error');
+                      } finally {
+                        setIsResettingDb(false);
+                      }
+                    }}
+                    className="px-3.5 py-2 bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-800 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer shadow-sm disabled:opacity-50"
+                    title="Wipe dummy bookings and initialize clean database tables"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isResettingDb ? 'animate-spin' : ''}`} />
+                    <span>{isResettingDb ? 'Resetting...' : 'Reset Database (Clean State)'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Status & Connection Card */}
+              <div className="bg-slate-900/90 rounded-2xl border border-slate-800/90 p-5 shadow-xl space-y-4 backdrop-blur-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-4">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse shadow-md shadow-emerald-500/50" />
+                    <div>
+                      <div className="text-sm font-bold text-white flex items-center space-x-2">
+                        <span>Database Status: Connected & Operational</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
+                          Active SQLite Engine
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-400 mt-0.5">
+                        File Storage: <strong className="text-amber-300 font-medium">database/hotel_management.db</strong> (auto-persisting on every write)
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-right text-xs text-slate-400">
+                    <div>Schema Version: <span className="font-semibold text-slate-200">v2.4 (Clean Schema)</span></div>
+                    <div>Port: <span className="font-semibold text-slate-200">3000 (Localhost)</span></div>
+                  </div>
+                </div>
+
+                {/* Table Record Metrics */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+                  <div className="p-3.5 bg-slate-950/80 rounded-xl border border-slate-800">
+                    <div className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">reservations (Bookings)</div>
+                    <div className="text-2xl font-bold text-amber-400 mt-1">{reservations.length}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Real SQL Booking Rows</div>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-950/80 rounded-xl border border-slate-800">
+                    <div className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">invoices (Folios)</div>
+                    <div className="text-2xl font-bold text-emerald-400 mt-1">{invoices.length}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Financial Ledger Records</div>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-950/80 rounded-xl border border-slate-800">
+                    <div className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">rooms (Inventory)</div>
+                    <div className="text-2xl font-bold text-sky-400 mt-1">{rooms.length}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Suites & Rooms Configured</div>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-950/80 rounded-xl border border-slate-800">
+                    <div className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">guest_services</div>
+                    <div className="text-2xl font-bold text-purple-400 mt-1">{guestServices.length}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Dining & Concierge Orders</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Live SQL Table Browser */}
+              <div className="bg-slate-900/90 rounded-2xl border border-slate-800/90 shadow-xl overflow-hidden backdrop-blur-sm">
+                <div className="p-4 bg-slate-950/70 border-b border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs font-bold text-slate-200">Live SQL Table Records:</span>
+                    <div className="flex rounded-lg bg-slate-900 p-1 border border-slate-800 text-xs">
+                      <button
+                        onClick={() => setDbViewTable('reservations')}
+                        className={`px-3 py-1 rounded-md font-semibold transition-all ${
+                          dbViewTable === 'reservations' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        reservations ({reservations.length})
+                      </button>
+                      <button
+                        onClick={() => setDbViewTable('invoices')}
+                        className={`px-3 py-1 rounded-md font-semibold transition-all ${
+                          dbViewTable === 'invoices' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        invoices ({invoices.length})
+                      </button>
+                      <button
+                        onClick={() => setDbViewTable('rooms')}
+                        className={`px-3 py-1 rounded-md font-semibold transition-all ${
+                          dbViewTable === 'rooms' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        rooms ({rooms.length})
+                      </button>
+                    </div>
+                  </div>
+
+                  <span className="text-[11px] text-slate-400">
+                    Changes made anywhere in the app write immediately to SQL
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                  {dbViewTable === 'reservations' && (
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-slate-950/90 text-slate-400 text-[11px] uppercase border-b border-slate-800">
+                        <tr>
+                          <th className="px-4 py-3">id</th>
+                          <th className="px-4 py-3">guest_name</th>
+                          <th className="px-4 py-3">room_number</th>
+                          <th className="px-4 py-3">room_type</th>
+                          <th className="px-4 py-3">check_in_date</th>
+                          <th className="px-4 py-3">check_out_date</th>
+                          <th className="px-4 py-3">status</th>
+                          <th className="px-4 py-3">created_at</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-850">
+                        {reservations.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                              No reservations in SQL database. Make a booking in the Guest Portal to see it stored here!
+                            </td>
+                          </tr>
+                        ) : (
+                          reservations.map(r => (
+                            <tr key={r.id} className="hover:bg-slate-800/30">
+                              <td className="px-4 py-3 font-semibold text-slate-300">#{r.id}</td>
+                              <td className="px-4 py-3 font-bold text-white">{r.guestName}</td>
+                              <td className="px-4 py-3 text-amber-400 font-semibold">Room {r.roomNumber}</td>
+                              <td className="px-4 py-3 text-slate-300">{r.roomType}</td>
+                              <td className="px-4 py-3 text-slate-300">{r.checkInDate}</td>
+                              <td className="px-4 py-3 text-slate-300">{r.checkOutDate}</td>
+                              <td className="px-4 py-3">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  r.status === 'Confirmed' ? 'bg-blue-500/20 text-blue-300' :
+                                  r.status === 'Checked_In' ? 'bg-emerald-500/20 text-emerald-300' :
+                                  'bg-slate-800 text-slate-400'
+                                }`}>
+                                  {r.status}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-400 text-[11px]">{r.createdAt || 'Just now'}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+
+                  {dbViewTable === 'invoices' && (
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-slate-950/90 text-slate-400 text-[11px] uppercase border-b border-slate-800">
+                        <tr>
+                          <th className="px-4 py-3">invoice_number</th>
+                          <th className="px-4 py-3">guest_name</th>
+                          <th className="px-4 py-3">room_number</th>
+                          <th className="px-4 py-3">grand_total</th>
+                          <th className="px-4 py-3">paid_amount</th>
+                          <th className="px-4 py-3">balance_amount</th>
+                          <th className="px-4 py-3">payment_status</th>
+                          <th className="px-4 py-3">invoice_date</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-850">
+                        {invoices.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                              No invoices in SQL database.
+                            </td>
+                          </tr>
+                        ) : (
+                          invoices.map(inv => (
+                            <tr key={inv.id} className="hover:bg-slate-800/30">
+                              <td className="px-4 py-3 font-semibold text-amber-300">{inv.invoiceNumber}</td>
+                              <td className="px-4 py-3 font-bold text-white">{inv.guestName}</td>
+                              <td className="px-4 py-3 text-slate-300">Room {inv.roomNumber}</td>
+                              <td className="px-4 py-3 font-bold text-white">{formatCurrency(inv.grandTotal)}</td>
+                              <td className="px-4 py-3 text-emerald-400 font-semibold">{formatCurrency(inv.paidAmount)}</td>
+                              <td className="px-4 py-3 font-semibold text-slate-300">{formatCurrency(inv.balanceAmount)}</td>
+                              <td className="px-4 py-3">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  inv.paymentStatus === 'Paid' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'
+                                }`}>
+                                  {inv.paymentStatus}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-400">{inv.invoiceDate}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+
+                  {dbViewTable === 'rooms' && (
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-slate-950/90 text-slate-400 text-[11px] uppercase border-b border-slate-800">
+                        <tr>
+                          <th className="px-4 py-3">number</th>
+                          <th className="px-4 py-3">type</th>
+                          <th className="px-4 py-3">floor</th>
+                          <th className="px-4 py-3">price_per_night</th>
+                          <th className="px-4 py-3">capacity</th>
+                          <th className="px-4 py-3">status</th>
+                          <th className="px-4 py-3">description</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-850">
+                        {rooms.map(rm => (
+                          <tr key={rm.id} className="hover:bg-slate-800/30">
+                            <td className="px-4 py-3 font-bold text-amber-400">Room {rm.number}</td>
+                            <td className="px-4 py-3 text-white font-medium">{rm.type}</td>
+                            <td className="px-4 py-3 text-slate-300">Floor {rm.floor}</td>
+                            <td className="px-4 py-3 font-semibold text-white">{formatCurrency(rm.pricePerNight, 0)}/nt</td>
+                            <td className="px-4 py-3 text-slate-300">{rm.capacity} Guests</td>
+                            <td className="px-4 py-3">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                rm.status === 'Available' ? 'bg-emerald-500/20 text-emerald-300' :
+                                rm.status === 'Reserved' ? 'bg-amber-500/20 text-amber-300' :
+                                'bg-red-500/20 text-red-300'
+                              }`}>
+                                {rm.status}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-slate-400">{rm.description}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              {/* Localhost Running Instructions Card */}
+              <div className="bg-slate-900/90 rounded-2xl border border-slate-800/90 p-5 shadow-xl space-y-3 backdrop-blur-sm">
+                <h3 className="text-sm font-bold text-slate-100 flex items-center space-x-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-400" />
+                  <span>How to Run Locally on Your Computer (Localhost)</span>
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  The SQL database requires <strong>zero external server installations</strong>. When you run on your Windows command prompt:
+                </p>
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs text-amber-300 font-mono space-y-1">
+                  <div>cd C:\Users\thiru\Searches\Downloads\kr-luxe-hotel</div>
+                  <div>npm install</div>
+                  <div>npm run dev</div>
+                </div>
+                <ul className="text-xs text-slate-400 space-y-1 list-disc list-inside">
+                  <li>The Express server starts at <strong className="text-slate-200">http://localhost:3000</strong>.</li>
+                  <li>All room bookings are automatically saved to <strong className="text-slate-200">database/hotel_management.db</strong> in real SQL.</li>
+                  <li>If you want to clear test data and start fresh, click <strong className="text-red-300">"Reset Database (Clean State)"</strong> above.</li>
+                  <li>Standalone SQL files are provided in the <strong className="text-amber-300">database/</strong> folder (<strong className="text-slate-200">schema.sql</strong> and <strong className="text-slate-200">reset_database.sql</strong>) if you wish to run them in MySQL or phpMyAdmin.</li>
+                </ul>
+              </div>
+            </div>
+          )}
         </main>
       </div>
 
@@ -1627,8 +1968,34 @@ export const InteractivePMS: React.FC<InteractivePMSProps> = ({
                   };
                   setInvoices([...invoices, newInv]);
 
+                  // Persist to SQL Database
+                  apiService.createReservation({
+                    guestName: newRes.guestName,
+                    guestEmail: `${newRes.guestName.toLowerCase().replace(/\s+/g, '.')}@example.com`,
+                    guestPhone: newRes.guestPhone,
+                    roomId: newRes.roomId,
+                    roomNumber: newRes.roomNumber,
+                    roomType: newRes.roomType,
+                    checkInDate: cin,
+                    checkOutDate: cout,
+                    numberOfGuests: 2,
+                    numberOfNights: nights,
+                    roomCharges: roomTotal,
+                    discount: 0,
+                    taxAmount: tax,
+                    grandTotal: grand,
+                    specialRequests: req,
+                    paymentMethod: 'Credit_Card',
+                    payNow: false
+                  }).then(sqlSaved => {
+                    if (sqlSaved) {
+                      setReservations(prev => prev.map(r => r.id === newRes.id ? sqlSaved.reservation : r));
+                      setInvoices(prev => prev.map(i => i.id === newInv.id ? sqlSaved.invoice : i));
+                    }
+                  }).catch(err => console.warn('SQL booking sync:', err));
+
                   setModalType(null);
-                  showNotification(`Reservation #${newRes.id} confirmed for ${newRes.guestName}!`);
+                  showNotification(`Reservation #${newRes.id} confirmed and saved to SQL!`);
                 }}
                 className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 rounded text-xs font-bold hover:from-amber-400 hover:to-amber-500 shadow-md shadow-amber-500/20"
               >

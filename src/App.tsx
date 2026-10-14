@@ -14,7 +14,8 @@ import {
   initialInvoices,
   initialNotifications
 } from './data/mockPmsData';
-import { Sparkles, ArrowLeft } from 'lucide-react';
+import { apiService } from './services/apiService';
+import { Sparkles, ArrowLeft, Database } from 'lucide-react';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => getCurrentUser());
@@ -25,7 +26,7 @@ export default function App() {
   const [rooms, setRooms] = useState<RoomItem[]>(initialRooms);
   const [reservations, setReservations] = useState<ReservationItem[]>(initialReservations);
   const [invoices, setInvoices] = useState<InvoiceItem[]>(initialInvoices);
-  const [services] = useState<ServiceItem[]>(initialServices);
+  const [services, setServices] = useState<ServiceItem[]>(initialServices);
   const [guestServices, setGuestServices] = useState<GuestServiceCharge[]>(initialGuestServices);
   const [notifications, setNotifications] = useState<GuestNotification[]>(() => {
     try {
@@ -34,6 +35,31 @@ export default function App() {
     } catch {}
     return initialNotifications;
   });
+
+  // Load live data from SQL Database on startup
+  useEffect(() => {
+    async function loadFromSqlDatabase() {
+      try {
+        const [sqlRooms, sqlReservations, sqlInvoices, sqlServices, sqlGuestServices, sqlSettings] = await Promise.all([
+          apiService.getRooms(),
+          apiService.getReservations(),
+          apiService.getInvoices(),
+          apiService.getServices(),
+          apiService.getGuestServices(),
+          apiService.getSettings()
+        ]);
+        if (sqlRooms && sqlRooms.length > 0) setRooms(sqlRooms);
+        if (sqlReservations) setReservations(sqlReservations);
+        if (sqlInvoices) setInvoices(sqlInvoices);
+        if (sqlServices && sqlServices.length > 0) setServices(sqlServices);
+        if (sqlGuestServices) setGuestServices(sqlGuestServices);
+        if (sqlSettings) setSettings(sqlSettings);
+      } catch (err) {
+        console.warn('SQL backend connection fallback:', err);
+      }
+    }
+    loadFromSqlDatabase();
+  }, []);
 
   useEffect(() => {
     try {
